@@ -1,0 +1,212 @@
+# Touch-control example — button toggle, brightness slider, page navigation.
+# Demonstrates every touch event type: press, release, and tracker.
+
+esphome:
+  name: ft800-touch
+  friendly_name: FT800 Touch Control
+
+esp32:
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+logger:
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+
+ft800:
+  id: eve
+  cs_pin: GPIO5
+  pd_pin: GPIO4
+  int_pin: GPIO2
+  display_size: 5in
+  brightness: 85
+
+# ---- Touch binary sensor: button press → toggle a light -------------------
+binary_sensor:
+  - platform: ft800
+    ft800_id: eve
+    tag: 1
+    name: "Button A"
+    id: btn_a
+    on_press:
+      - light.toggle: living_room_light
+    on_release:
+      - logger.log: "Button A released"
+
+  - platform: ft800
+    ft800_id: eve
+    tag: 2
+    name: "Button B"
+    on_press:
+      - logger.log: "Button B pressed"
+
+  # Page navigation
+  - platform: ft800
+    ft800_id: eve
+    tag: 3
+    name: "Page Next"
+    on_press:
+      - globals.set:
+          id: current_page
+          value: !lambda "return (id(current_page) + 1) % 3;"
+
+  - platform: ft800
+    ft800_id: eve
+    tag: 4
+    name: "Page Prev"
+    on_press:
+      - globals.set:
+          id: current_page
+          value: !lambda "return (id(current_page) + 2) % 3;"
+
+# ---- Tracker sensor: slider → set light brightness ------------------------
+sensor:
+  - platform: ft800
+    ft800_id: eve
+    tag: 10
+    name: "Brightness Slider"
+    id: bri_slider
+    on_value:
+      - light.control:
+          id: living_room_light
+          brightness: !lambda "return x;"  # sensor is already 0.0–1.0
+
+globals:
+  - id: current_page
+    type: int
+    restore_value: yes
+    initial_value: "0"
+
+  - id: light_state
+    type: bool
+    restore_value: yes
+    initial_value: "false"
+
+# ---- Light (simulated here; replace with real light component) -------------
+light:
+  - platform: monochromatic
+    name: "Living Room Light"
+    id: living_room_light
+    output: dummy_output
+
+output:
+  - platform: template
+    id: dummy_output
+    type: float
+    write_action:
+      - logger.log:
+          format: "Light output: %.2f"
+          args: ["x"]
+
+# ---- Display ---------------------------------------------------------------
+display:
+  - platform: ft800
+    ft800_id: eve
+    update_interval: 50ms
+    lambda: |-
+      int page = id(current_page);
+      bool light_on = id(living_room_light).current_values.is_on();
+      float brightness = id(living_room_light).current_values.get_brightness();
+
+      // ---- Header (all pages) ----
+      it.rect(0, 0, 480, 44, Color(30, 60, 120));
+      it.color_rgb(255, 255, 255);
+      char page_label[24];
+      snprintf(page_label, sizeof(page_label), "Page %d / 2", page + 1);
+      it.text_centered(240, 12, 21, page_label);
+
+      // Prev / Next navigation buttons
+      it.tag(4);
+      it.button(4, 6, 70, 32, 18, 0, "< Prev");
+      it.tag(3);
+      it.button(406, 6, 70, 32, 18, 0, "Next >");
+      it.tag(0);
+
+      it.clear_color_rgb(15, 15, 25);
+      // (CLEAR was called at start of frame by render_frame_())
+
+      if (page == 0) {
+        // ---- Page 0: light control ----
+        it.color_rgb(200, 220, 255);
+        it.text_centered(240, 65, 26, "Living Room Light");
+
+        // Toggle button (TAG 1)
+        it.tag(1);
+        if (light_on) {
+          it.fg_color(Color(255, 210, 60));
+          it.bg_color(Color(80, 60, 0));
+        } else {
+          it.fg_color(Color(120, 120, 120));
+          it.bg_color(Color(25, 25, 25));
+        }
+        it.toggle(170, 100, 140, 26, 0, light_on ? 65535 : 0, "OFF\xFFON");
+        it.tag(0);
+
+        // Brightness slider (TAG 10)
+        it.color_rgb(180, 220, 255);
+        it.text(30, 160, 18, 0, "Brightness");
+        it.tag(10);
+        uint16_t bri = (uint16_t)(brightness * 65535.0f);
+        it.fg_color(Color(255, 200, 50));
+        it.slider(30, 185, 420, 28, 0, bri, 65535);
+        it.track(30, 185, 420, 28, 10);
+        it.tag(0);
+
+        // Brightness value label
+        it.color_rgb(255, 255, 255);
+        char bri_str[8];
+        snprintf(bri_str, sizeof(bri_str), "%d%%", (int)(brightness * 100));
+        it.text_centered(240, 230, 21, bri_str);
+
+      } else if (page == 1) {
+        // ---- Page 1: two action buttons ----
+        it.color_rgb(200, 220, 255);
+        it.text_centered(240, 65, 21, "Quick Actions");
+
+        it.tag(1);
+        it.fg_color(Color(60, 180, 80));
+        it.button(40, 100, 180, 60, 26, 0, "Toggle\nLight");
+        it.tag(2);
+        it.fg_color(Color(180, 60, 60));
+        it.button(260, 100, 180, 60, 26, 0, "Action B");
+        it.tag(0);
+
+        it.color_rgb(160, 160, 160);
+        it.text_centered(240, 220, 18, "Tap a button above");
+
+      } else {
+        // ---- Page 2: status info ----
+        it.color_rgb(200, 220, 255);
+        it.text_centered(240, 65, 21, "Status");
+
+        it.color_rgb(100, 200, 255);
+        it.text(40, 110, 21, 0, "Light:");
+        it.color_rgb(255, 255, 255);
+        it.text(140, 110, 21, 0, light_on ? "ON" : "OFF");
+
+        it.color_rgb(100, 200, 255);
+        it.text(40, 150, 21, 0, "Brightness:");
+        char bstr[8];
+        snprintf(bstr, sizeof(bstr), "%d%%", (int)(brightness * 100));
+        it.color_rgb(255, 255, 255);
+        it.text(180, 150, 21, 0, bstr);
+      }

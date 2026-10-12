@@ -1,0 +1,205 @@
+# Dashboard example — live sensor values pulled from Home Assistant.
+# Shows temperature, humidity, a light toggle, and a brightness slider.
+#
+# In HA: expose sensors via the esphome integration (they appear as
+# entities automatically once the device is adopted).
+
+esphome:
+  name: ft800-dashboard
+  friendly_name: FT800 Dashboard
+
+esp32:
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+logger:
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+
+# ---- FT800 core component --------------------------------------------------
+ft800:
+  id: eve
+  cs_pin: GPIO5
+  pd_pin: GPIO4
+  int_pin: GPIO2
+  display_size: 5in
+  brightness: 90
+
+# ---- Home Assistant sensor subscriptions ------------------------------------
+# These pull values directly from HA entities over the ESPHome API.
+sensor:
+  - platform: homeassistant
+    id: ha_temp
+    entity_id: sensor.living_room_temperature
+    unit_of_measurement: "°C"
+
+  - platform: homeassistant
+    id: ha_humidity
+    entity_id: sensor.living_room_humidity
+    unit_of_measurement: "%"
+
+  - platform: homeassistant
+    id: ha_light_brightness
+    entity_id: light.living_room
+    attribute: brightness    # 0–255
+
+# ---- HA switch state --------------------------------------------------------
+binary_sensor:
+  - platform: homeassistant
+    id: ha_light_on
+    entity_id: light.living_room
+
+# ---- Touch binary sensors (TAG press/release events) -----------------------
+  - platform: ft800
+    ft800_id: eve
+    tag: 10
+    name: "Toggle Light"
+    on_press:
+      - homeassistant.action:
+          action: light.toggle
+          target:
+            entity_id: light.living_room
+
+  - platform: ft800
+    ft800_id: eve
+    tag: 11
+    name: "Page 2 Button"
+    on_press:
+      - globals.set:
+          id: active_page
+          value: "1"
+
+  - platform: ft800
+    ft800_id: eve
+    tag: 12
+    name: "Page 1 Button"
+    on_press:
+      - globals.set:
+          id: active_page
+          value: "0"
+
+# ---- Brightness slider as FT800 tracker sensor ------------------------------
+  - platform: ft800
+    ft800_id: eve
+    tag: 20
+    name: "Brightness slider"
+    id: brightness_sensor
+
+globals:
+  - id: active_page
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+# ---- Display ----------------------------------------------------------------
+display:
+  - platform: ft800
+    ft800_id: eve
+    update_interval: 50ms
+    lambda: |-
+      int page = id(active_page);
+
+      if (page == 0) {
+        // ---- Page 0: sensor dashboard ----
+
+        // Background gradient (dark grey)
+        it.clear_color_rgb(20, 20, 30);
+        it.clear_screen();
+
+        // Title bar
+        it.rect(0, 0, 480, 40, Color(40, 80, 160));
+        it.color_rgb(255, 255, 255);
+        it.text_centered(240, 10, 26, "Living Room Dashboard");
+
+        // Temperature card
+        it.rect(10, 50, 220, 90, Color(30, 30, 50));
+        it.color_rgb(100, 200, 255);
+        it.text(20, 58, 18, 0, "Temperature");
+        it.color_rgb(255, 255, 255);
+        char tmp[16];
+        snprintf(tmp, sizeof(tmp), "%.1f", id(ha_temp).state);
+        it.text(20, 80, 31, 0, tmp);
+        it.color_rgb(150, 200, 255);
+        it.text(140, 95, 21, 0, "\xb0C");
+
+        // Humidity card
+        it.rect(250, 50, 220, 90, Color(30, 30, 50));
+        it.color_rgb(100, 200, 255);
+        it.text(260, 58, 18, 0, "Humidity");
+        it.color_rgb(255, 255, 255);
+        snprintf(tmp, sizeof(tmp), "%.0f%%", id(ha_humidity).state);
+        it.text(260, 80, 31, 0, tmp);
+
+        // Light toggle button (TAG 10)
+        it.tag(10);
+        bool light_on = id(ha_light_on).state;
+        if (light_on) {
+          it.fg_color(Color(255, 200, 50));
+          it.bg_color(Color(80, 60, 0));
+        } else {
+          it.fg_color(Color(150, 150, 150));
+          it.bg_color(Color(30, 30, 30));
+        }
+        it.toggle(30, 160, 140, 26, 0, light_on ? 65535 : 0, "OFF\xFFON");
+        it.tag(0);
+        it.color_rgb(255, 255, 255);
+        it.text(180, 168, 21, 0, "Living Room Light");
+
+        // Brightness slider (TAG 20)
+        it.color_rgb(100, 200, 255);
+        it.text(30, 220, 18, 0, "Brightness");
+        it.tag(20);
+        uint16_t bri_val = (uint16_t)(id(ha_light_brightness).state * 65535.0f / 255.0f);
+        it.fg_color(Color(255, 200, 50));
+        it.slider(30, 240, 420, 20, 0, bri_val, 65535);
+        it.track(30, 240, 420, 20, 20);
+        it.tag(0);
+
+        // Page 2 navigation button (TAG 11)
+        it.tag(11);
+        it.button(380, 5, 90, 30, 18, 0, "Settings >");
+        it.tag(0);
+
+      } else {
+        // ---- Page 1: settings ----
+
+        it.clear_color_rgb(20, 30, 20);
+        it.clear_screen();
+
+        it.rect(0, 0, 480, 40, Color(40, 120, 60));
+        it.color_rgb(255, 255, 255);
+        it.text_centered(240, 10, 26, "Settings");
+
+        it.color_rgb(200, 255, 200);
+        it.text(40, 80, 21, 0, "Touch calibration:");
+        it.tag(30);
+        it.button(40, 110, 200, 40, 21, 0, "Calibrate Touch");
+        it.tag(0);
+
+        it.color_rgb(200, 200, 200);
+        it.text(40, 180, 18, 0, "Version: 1.0  |  FT800 EVE ESPHome");
+
+        // Back button (TAG 12)
+        it.tag(12);
+        it.button(10, 5, 90, 30, 18, 0, "< Back");
+        it.tag(0);
+      }

@@ -1,0 +1,57 @@
+# Minimal FT800 example — static text, no Home Assistant.
+# Verifies SPI wiring and that the display boots correctly.
+
+esphome:
+  name: ft800-minimal
+  friendly_name: FT800 Minimal
+
+esp32:
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+  level: DEBUG  # set to VERBOSE to see FIFO writes
+
+spi:
+  clk_pin: GPIO18    # VSPI SCK
+  mosi_pin: GPIO23   # VSPI MOSI
+  miso_pin: GPIO19   # VSPI MISO
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+
+ft800:
+  id: eve
+  cs_pin: GPIO5       # SPI chip-select (active low)
+  pd_pin: GPIO4       # Power-down (active low) — strongly recommended
+  int_pin: GPIO2      # Touch interrupt (active low, falling edge)
+  display_size: 5in   # VM800B50A — 480×272 WQVGA
+  brightness: 80      # 80 %
+
+display:
+  - platform: ft800
+    ft800_id: eve
+    update_interval: 100ms
+    lambda: |-
+      // Clear to dark blue
+      it.clear_color_rgb(0, 0, 64);
+      it.clear_screen();
+
+      // White title
+      it.color_rgb(255, 255, 255);
+      it.text_centered(240, 80, 31, "FT800 EVE");
+
+      // Smaller subtitle
+      it.color_rgb(180, 220, 255);
+      it.text_centered(240, 130, 26, "ESPHome External Component");
+      it.text_centered(240, 160, 21, "VM800B50A  480x272");
+
+      // A coloured rectangle at the bottom
+      it.rect(20, 220, 440, 30, Color(80, 160, 80));
+      it.color_rgb(255, 255, 255);
+      it.text_centered(240, 228, 18, "OK — display working");
